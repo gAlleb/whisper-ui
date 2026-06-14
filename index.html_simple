@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Расшифровка аудио + AI</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --fg:#e7e9ee; --muted:#8b93a3;
+          --accent:#4f8cff; --border:#2a2e38; --success:#40c057; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         background:var(--bg); color:var(--fg);
+         min-height:100vh; display:flex; align-items:flex-start; justify-content:center;
+         padding:40px 16px; }
+  .wrap { width:100%; max-width:760px; }
+  h1 { font-size:20px; font-weight:600; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:14px; margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--border);
+          border-radius:12px; padding:20px; }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:32px 16px;
+          text-align:center; cursor:pointer; transition:.15s; }
+  .drop:hover, .drop.over { border-color:var(--accent); background:#1e2330; }
+  .drop p { margin:6px 0 0; color:var(--muted); font-size:14px; }
+  .drop strong { color:var(--fg); }
+  
+  .row { display:flex; gap:12px; align-items:center; margin-top:20px; flex-wrap:wrap; }
+  label.lang { color:var(--muted); font-size:14px; display:flex; gap:6px; align-items:center; }
+  select { background:var(--bg); color:var(--fg); border:1px solid var(--border);
+           border-radius:8px; padding:7px 10px; font:inherit; }
+  
+  .option-group { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .checkbox-row { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+  .checkbox-row input { cursor: pointer; width: 16px; height: 16px; }
+  .context-area { margin-top: 12px; display: none; }
+  .context-area.show { display: block; }
+  
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:10px 20px; font:inherit; font-weight:600; cursor:pointer; margin-left:auto; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  
+  .file { margin-top:14px; font-size:14px; color:var(--muted); }
+  .file b { color:var(--fg); }
+  .status { margin-top:16px; font-size:14px; color:var(--accent); display:none; }
+  .status.show { display:block; }
+  
+  .out { margin-top:20px; display:none; }
+  .out.show { display:block; }
+  .out h2 { font-size:14px; color:var(--muted); font-weight:600; margin:0 0 8px;
+            display:flex; justify-content:space-between; align-items:center; }
+  .badge { background: #2d333d; color: var(--muted); padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: normal; }
+  .badge.ai { background: #1e3a5f; color: #a5d8ff; }
+  
+  .copy { background:transparent; color:var(--accent); border:1px solid var(--border);
+          padding:4px 12px; font-size:13px; margin:0; }
+  textarea { width:100%; min-height:220px; background:var(--bg); color:var(--fg);
+             border:1px solid var(--border); border-radius:10px; padding:14px;
+             font:15px/1.6 system-ui; resize:vertical; }
+  textarea.small { min-height: 80px; font-size: 13px; margin-bottom: 10px; border-color: var(--border); }
+  
+  /* Стили для ЧАТА */
+  .chat-section { margin-top: 24px; border-top: 1px dashed var(--border); padding-top: 20px; display: none; }
+  .chat-section.show { display: block; }
+  .chat-title { font-size: 15px; font-weight: 600; color: var(--fg); margin: 0 0 10px; display: flex; gap: 8px; align-items: center; }
+  .chat-log { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+  .chat-msg { max-width: 85%; padding: 8px 14px; border-radius: 10px; font-size: 14px; line-height: 1.45; word-break: break-word; }
+  .chat-msg.user { background: var(--accent); color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; }
+  .chat-msg.model { background: #232731; color: var(--fg); align-self: flex-start; border-bottom-left-radius: 2px; white-space: pre-wrap; }
+  .chat-msg.system { background: transparent; color: var(--muted); align-self: center; font-size: 12px; text-align: center; }
+  .chat-input-row { display: flex; gap: 8px; }
+  .chat-input { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font: inherit; font-size: 14px; }
+  .chat-input:focus { border-color: var(--accent); outline: none; }
+  .chat-send { background: var(--success); color: #fff; padding: 8px 16px; font-size: 14px; font-weight: bold; margin: 0; border-radius: 8px; }
+  
+  .err { color:#ff6b6b; }
+  .spin { display:inline-block; width:14px; height:14px; border:2px solid var(--accent);
+          border-top-color:transparent; border-radius:50%; animation:s .7s linear infinite;
+          vertical-align:-2px; margin-right:8px; }
+  @keyframes s { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Расшифровка аудио</h1>
+  <p class="sub">Whisper Local + Gemini 3.5 Flash + Чат-Ассистент - (Made by Stepan)</p>
+
+  <div class="card">
+    <div class="drop" id="drop">
+      <strong>Перетащи файл сюда</strong> или нажми
+      <p>.ogg · .mp3 · .wav · .m4a · .flac</p>
+      <input type="file" id="file" accept="audio/*,video/*" hidden>
+    </div>
+
+    <div class="file" id="fileName"></div>
+
+    <div class="row">
+      <label class="lang">Язык:
+        <select id="lang">
+          <option value="ru" selected>Русский</option>
+          <option value="">Авто</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+      <button id="go" disabled>Запустить</button>
+    </div>
+
+    <div class="option-group">
+        <label class="checkbox-row">
+            <input type="checkbox" id="clean">
+            <span>✨ Улучшить текст через Gemini (пунктуация, абзацы)</span>
+        </label>
+        <div class="context-area" id="ctxWrap">
+            <textarea id="context" class="small" placeholder="Добавь контекст для точности (например: 'технический созвон по docker', 'лекция по истории', 'интервью с врачом')"></textarea>
+        </div>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <!-- БЛОК РАСШИФРОВКИ -->
+    <div class="out" id="out">
+      <h2>
+        <span>Текст <span id="modeBadge" class="badge">сырой</span></span>
+        <button class="copy" id="copy">Копировать</button>
+      </h2>
+      <textarea id="text" spellcheck="false"></textarea>
+
+      <!-- БЛОК ЧАТА (Новый) -->
+      <div class="chat-section" id="chatSection">
+          <div class="chat-title">💬 Диалог по содержанию записи</div>
+          <div class="chat-log" id="chatLog"></div>
+          <div class="chat-input-row">
+              <input type="text" id="chatInput" class="chat-input" placeholder="Спроси что-нибудь по записи... (например: 'Сделай краткое резюме')">
+              <button id="chatSend" class="chat-send">Спросить</button>
+          </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const fileName = document.getElementById('fileName');
+const go = document.getElementById('go');
+const status = document.getElementById('status');
+const out = document.getElementById('out');
+const text = document.getElementById('text');
+const langSel = document.getElementById('lang');
+const cleanCheck = document.getElementById('clean');
+const ctxWrap = document.getElementById('ctxWrap');
+const modeBadge = document.getElementById('modeBadge');
+
+// Элементы чата
+const chatSection = document.getElementById('chatSection');
+const chatLog = document.getElementById('chatLog');
+const chatInput = document.getElementById('chatInput');
+const chatSend = document.getElementById('chatSend');
+let chatHistory = []; // Хранилище для ведения сессии диалога
+
+cleanCheck.addEventListener('change', () => {
+    ctxWrap.classList.toggle('show', cleanCheck.checked);
+});
+
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files.length) pick(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) pick(fileInput.files[0]); });
+
+function pick(f) {
+  chosen = f;
+  fileName.innerHTML = 'Выбран: <b>' + f.name + '</b> (' + (f.size/1048576).toFixed(1) + ' МБ)';
+  go.disabled = false;
+  out.classList.remove('show');
+  status.classList.remove('show');
+  chatSection.classList.remove('show'); // Скрываем чат при выборе нового файла
+}
+
+go.addEventListener('click', async () => {
+  if (!chosen) return;
+  go.disabled = true;
+  out.classList.remove('show');
+  status.className = 'status show';
+  
+  let statusText = '<span class="spin"></span>Шаг 1: Локальное распознавание…';
+  if (cleanCheck.checked) statusText += '<br><small style="margin-left:22px;opacity:0.7">Затем Шаг 2: Улучшение через Gemini</small>';
+  status.innerHTML = statusText;
+
+  const fd = new FormData();
+  fd.append('file', chosen);
+  fd.append('language', langSel.value);
+  fd.append('clean_with_gemini', cleanCheck.checked);
+  fd.append('context', document.getElementById('context').value);
+
+  try {
+    const r = await fetch('/process', { method:'POST', body:fd });
+    
+    if (!r.ok) {
+        const errText = await r.text();
+        throw new Error(`Ошибка сервера: ${r.status}. ${errText.slice(0,100)}`);
+    }
+    
+    const data = await r.json();
+    text.value = data.text || '(пустой ответ)';
+    
+    if (data.raw) {
+        modeBadge.textContent = 'сырой Whisper';
+        modeBadge.className = 'badge';
+    } else {
+        modeBadge.textContent = 'улучшено Gemini ✨';
+        modeBadge.className = 'badge ai';
+    }
+
+    out.classList.add('show');
+    status.classList.remove('show');
+    
+    // Инициализируем и показываем окно чата после успешной расшифровки
+    initChat();
+  } catch (e) {
+    status.className = 'status show err';
+    status.textContent = 'Ошибка: ' + e.message;
+    console.error(e);
+  } finally {
+    go.disabled = false;
+  }
+});
+
+// --- Скрипты чата ---
+function initChat() {
+    chatLog.innerHTML = '<div class="chat-msg system">Чат инициализирован. Вы можете задавать вопросы по содержанию этой записи.</div>';
+    chatHistory = [];
+    chatSection.classList.add('show');
+    chatInput.value = '';
+}
+
+chatSend.addEventListener('click', sendChatMessage);
+chatInput.addEventListener('keypress', e => {
+    if (e.key === 'Enter') sendChatMessage();
+});
+
+async function sendChatMessage() {
+    const msg = chatInput.value.trim();
+    if (!msg || chatSend.disabled) return;
+
+    // Добавляем сообщение пользователя на экран
+    appendMessage('user', msg);
+    chatInput.value = '';
+    chatSend.disabled = true;
+
+    // Индикатор загрузки ассистента
+    const loader = appendMessage('model', 'Думаю…');
+
+    try {
+        const r = await fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                context: text.value, // Передаем весь текст расшифровки как базу знаний
+                message: msg,
+                history: chatHistory
+            })
+        });
+
+        const data = await r.json();
+        loader.remove(); // Удаляем индикатор загрузки
+
+        if (data.error) {
+            appendMessage('model', 'Ошибка: ' + data.error);
+        } else {
+            appendMessage('model', data.text);
+            // Записываем диалог в локальную историю
+            chatHistory.push({ role: 'user', text: msg });
+            chatHistory.push({ role: 'model', text: data.text });
+        }
+    } catch (e) {
+        loader.remove();
+        appendMessage('model', 'Ошибка соединения с сервером: ' + e.message);
+    } finally {
+        chatSend.disabled = false;
+    }
+}
+
+function appendMessage(role, content) {
+    const div = document.createElement('div');
+    div.className = `chat-msg ${role}`;
+    div.textContent = content;
+    chatLog.appendChild(div);
+    chatLog.scrollTop = chatLog.scrollHeight; // Скроллим чат вниз
+    return div;
+}
+
+// Копирование
+document.getElementById('copy').addEventListener('click', () => {
+  text.select();
+  navigator.clipboard.writeText(text.value);
+  const btn = document.getElementById('copy');
+  const oldText = btn.textContent;
+  btn.textContent = 'Готово!';
+  setTimeout(() => btn.textContent = oldText, 2000);
+});
+</script>
+</body>
+</html>

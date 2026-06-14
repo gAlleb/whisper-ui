@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Расшифровка · whisper + gemini</title>
+<style>
+  /* ─────────────────────────────────────────────────────────────
+     ДИЗАЙН-ТОКЕНЫ
+     Палитра: «осциллограф» — графит, сталь, один акцент-сигнал.
+  ───────────────────────────────────────────────────────────── */
+  :root{
+    --bg:#0a0c10;
+    --bg2:#0e1218;
+    --panel:#121821;
+    --panel2:#161d28;
+    --line:#1f2935;
+    --line2:#2a3645;
+    --fg:#e8edf4;
+    --muted:#7d8aa0;
+    --dim:#566375;
+    --signal:#5ee6c4;      /* акцент — «зелёный сигнал» осциллографа */
+    --signal-dim:#2f7d6c;
+    --warn:#ff6b6b;
+    --gold:#e6b35e;
+    --radius:14px;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;}
+  body{
+    font:15px/1.6 var(--sans);
+    color:var(--fg);
+    background:var(--bg);
+    overflow-x:hidden;
+    min-height:100%;
+  }
+
+  /* ── АНИМИРОВАННЫЙ ФОН (тяжёлое — отключается лёгким режимом) ── */
+  .bg-field{
+    position:fixed; inset:0; z-index:-2;
+    background:
+      radial-gradient(900px 500px at 15% -10%, #10202a 0%, transparent 60%),
+      radial-gradient(800px 600px at 110% 20%, #161226 0%, transparent 55%),
+      var(--bg);
+  }
+  .bg-grid{
+    position:fixed; inset:0; z-index:-1; opacity:.25;
+    background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:44px 44px;
+    -webkit-mask-image:radial-gradient(circle at 50% 30%,#000 0%,transparent 75%);
+    mask-image:radial-gradient(circle at 50% 30%,#000 0%,transparent 75%);
+  }
+  /* плавающая звуковая волна на фоне */
+  .bg-wave{position:fixed;left:0;right:0;top:0;height:100vh;z-index:-1;opacity:.5;pointer-events:none;}
+  .bg-wave svg{width:100%;height:100%;}
+  .bg-wave path{
+    fill:none;stroke:var(--signal-dim);stroke-width:1.2;
+    animation:drift 14s ease-in-out infinite;
+  }
+  .bg-wave path:nth-child(2){stroke:#2b3a66;animation-duration:19s;animation-direction:reverse;opacity:.7;}
+  @keyframes drift{
+    0%,100%{transform:translateY(0) scaleY(1);}
+    50%{transform:translateY(-18px) scaleY(1.15);}
+  }
+
+  /* ── ЛЁГКИЙ РЕЖИМ: глушим всё дорогое для GPU/CPU ── */
+  body.lite .bg-wave{display:none;}
+  body.lite .bg-grid{display:none;}
+  body.lite .bg-field{background:var(--bg);}
+  body.lite *{
+    animation:none !important;
+    transition:none !important;
+    backdrop-filter:none !important;
+    box-shadow:none !important;
+  }
+  body.lite .card,body.lite .panel{background:var(--panel);}
+
+  /* ─────────────────────────── ЛЕЙАУТ ─────────────────────────── */
+  .shell{max-width:840px;margin:0 auto;padding:34px 20px 80px;}
+
+  header.top{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
+  .logo{
+    width:38px;height:38px;border-radius:10px;flex:none;
+    background:linear-gradient(145deg,#16202b,#0c1118);
+    border:1px solid var(--line2);
+    display:grid;place-items:center;
+    box-shadow:0 0 0 1px #0006,0 8px 24px -12px var(--signal-dim);
+  }
+  .logo svg{width:22px;height:22px;}
+  .logo .lp{stroke:var(--signal);stroke-width:2;fill:none;stroke-linecap:round;
+            animation:pulse 2.4s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.55;}50%{opacity:1;}}
+  h1{font:600 19px/1.2 var(--sans);margin:0;letter-spacing:-.01em;}
+  .tag{font:500 11px/1 var(--mono);color:var(--dim);letter-spacing:.08em;
+       text-transform:uppercase;margin-top:5px;}
+
+  .lite-switch{margin-left:auto;display:flex;align-items:center;gap:9px;
+               font:500 12px/1 var(--mono);color:var(--muted);cursor:pointer;
+               user-select:none;letter-spacing:.04em;}
+  .sw{width:40px;height:22px;border-radius:99px;background:var(--line2);
+      border:1px solid var(--line2);position:relative;transition:.2s;flex:none;}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;
+             border-radius:50%;background:var(--muted);transition:.2s;}
+  .lite-switch.on .sw{background:var(--signal-dim);border-color:var(--signal);}
+  .lite-switch.on .sw::after{left:20px;background:var(--signal);}
+
+  /* ── КАРТОЧКА ── */
+  .card{
+    margin-top:24px;
+    background:linear-gradient(180deg,var(--panel),var(--bg2));
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:22px;
+    box-shadow:0 24px 60px -30px #000,inset 0 1px 0 #ffffff08;
+  }
+
+  /* ── ЗОНА ЗАГРУЗКИ ── */
+  .drop{
+    position:relative;border:1.5px dashed var(--line2);border-radius:12px;
+    padding:34px 18px;text-align:center;cursor:pointer;
+    transition:border-color .2s,background .2s;
+    overflow:hidden;
+  }
+  .drop:hover,.drop.over{border-color:var(--signal);background:#0e1a1c;}
+  .drop .ico{width:34px;height:34px;margin:0 auto 10px;color:var(--signal);}
+  .drop strong{color:var(--fg);font-weight:600;}
+  .drop p{margin:6px 0 0;color:var(--muted);font-size:13px;}
+  .drop .formats{font:500 11px/1 var(--mono);color:var(--dim);margin-top:10px;letter-spacing:.05em;}
+
+  /* живая дорожка-осциллограф внутри дропзоны при наведении */
+  .scan{position:absolute;left:0;right:0;bottom:0;height:2px;
+        background:linear-gradient(90deg,transparent,var(--signal),transparent);
+        opacity:0;transition:opacity .2s;}
+  .drop:hover .scan,.drop.over .scan{opacity:.8;animation:scan 1.6s linear infinite;}
+  @keyframes scan{0%{transform:translateX(-100%);}100%{transform:translateX(100%);}}
+
+  .file{margin-top:14px;font:500 13px/1.5 var(--mono);color:var(--muted);}
+  .file b{color:var(--fg);}
+
+  /* ── ПАНЕЛЬ УПРАВЛЕНИЯ ── */
+  .controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:18px;}
+  .ctl{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);}
+  select{background:var(--bg);color:var(--fg);border:1px solid var(--line2);
+          border-radius:9px;padding:8px 11px;font:inherit;cursor:pointer;}
+  select:focus{outline:2px solid var(--signal-dim);outline-offset:1px;}
+
+  .check{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px;color:var(--muted);}
+  .check input{appearance:none;width:18px;height:18px;border:1.5px solid var(--line2);
+               border-radius:5px;background:var(--bg);cursor:pointer;position:relative;flex:none;transition:.15s;}
+  .check input:checked{background:var(--signal-dim);border-color:var(--signal);}
+  .check input:checked::after{content:"";position:absolute;left:5px;top:1px;width:5px;height:10px;
+               border:solid var(--signal);border-width:0 2px 2px 0;transform:rotate(45deg);}
+
+  .run{margin-left:auto;background:var(--signal);color:#06231d;border:0;
+       border-radius:10px;padding:11px 22px;font:700 14px/1 var(--sans);cursor:pointer;
+       letter-spacing:.01em;transition:transform .12s,box-shadow .2s;
+       box-shadow:0 0 0 1px var(--signal-dim),0 10px 30px -12px var(--signal);}
+  .run:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 0 0 1px var(--signal),0 14px 36px -12px var(--signal);}
+  .run:active:not(:disabled){transform:translateY(0);}
+  .run:disabled{opacity:.45;cursor:not-allowed;}
+
+  .ctx{margin-top:14px;display:none;}
+  .ctx.show{display:block;}
+  .ctx label{display:block;font:500 11px/1 var(--mono);color:var(--dim);
+             text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;}
+  .ctx input{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line2);
+             border-radius:9px;padding:9px 12px;font:inherit;}
+  .ctx input:focus{outline:2px solid var(--signal-dim);outline-offset:1px;}
+
+  /* ── СТАТУС / ПРОГРЕСС ── */
+  .status{display:none;margin-top:18px;align-items:center;gap:12px;
+          font:500 13px/1.4 var(--mono);color:var(--signal);
+          padding:13px 15px;background:#0c1518;border:1px solid var(--line);border-radius:10px;}
+  .status.show{display:flex;}
+  .status.err{color:var(--warn);background:#1a0e0e;border-color:#3a1f1f;}
+  .eq{display:flex;gap:3px;align-items:flex-end;height:18px;flex:none;}
+  .eq i{width:3px;background:var(--signal);border-radius:2px;animation:eq 1s ease-in-out infinite;}
+  .eq i:nth-child(1){height:6px;animation-delay:0s;}
+  .eq i:nth-child(2){height:14px;animation-delay:.15s;}
+  .eq i:nth-child(3){height:9px;animation-delay:.3s;}
+  .eq i:nth-child(4){height:17px;animation-delay:.45s;}
+  .eq i:nth-child(5){height:7px;animation-delay:.6s;}
+  @keyframes eq{0%,100%{transform:scaleY(.4);}50%{transform:scaleY(1);}}
+  .status .sub{color:var(--dim);font-size:11px;}
+
+  /* ── ВЫВОД ── */
+  .out{display:none;margin-top:22px;}
+  .out.show{display:block;}
+  .out-head{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
+  .out-head .t{font:500 11px/1 var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.07em;}
+  .badge{font:600 10px/1 var(--mono);padding:5px 9px;border-radius:6px;letter-spacing:.04em;
+         background:var(--line);color:var(--muted);}
+  .badge.ai{background:#10261f;color:var(--signal);border:1px solid var(--signal-dim);}
+  .copy{margin-left:auto;background:transparent;color:var(--signal);
+        border:1px solid var(--line2);border-radius:8px;padding:6px 13px;
+        font:500 12px/1 var(--mono);cursor:pointer;transition:.15s;}
+  .copy:hover{border-color:var(--signal);background:#0e1a1c;}
+  textarea{width:100%;min-height:200px;background:var(--bg);color:var(--fg);
+           border:1px solid var(--line2);border-radius:11px;padding:15px;
+           font:14px/1.7 var(--sans);resize:vertical;}
+  textarea:focus{outline:2px solid var(--signal-dim);outline-offset:1px;}
+
+  /* ── ЧАТ ── */
+  .chat{display:none;margin-top:22px;border-top:1px solid var(--line);padding-top:20px;}
+  .chat.show{display:block;}
+  .chat-h{font:500 11px/1 var(--mono);color:var(--dim);text-transform:uppercase;
+          letter-spacing:.07em;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+  .chat-h::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--signal);
+                  box-shadow:0 0 8px var(--signal);}
+  .log{display:flex;flex-direction:column;gap:10px;max-height:340px;overflow-y:auto;
+       padding-right:6px;margin-bottom:14px;}
+  .msg{padding:11px 14px;border-radius:11px;font-size:14px;line-height:1.55;max-width:85%;white-space:pre-wrap;}
+  .msg.user{align-self:flex-end;background:var(--signal-dim);color:#eafff8;border-bottom-right-radius:3px;}
+  .msg.model{align-self:flex-start;background:var(--panel2);border:1px solid var(--line2);border-bottom-left-radius:3px;}
+  .msg.system{align-self:center;background:transparent;color:var(--dim);font:500 12px/1.4 var(--mono);text-align:center;}
+  .chat-row{display:flex;gap:10px;}
+  .chat-row input{flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--line2);
+                  border-radius:10px;padding:11px 14px;font:inherit;}
+  .chat-row input:focus{outline:2px solid var(--signal-dim);outline-offset:1px;}
+  .chat-row button{background:var(--panel2);color:var(--fg);border:1px solid var(--line2);
+                   border-radius:10px;padding:0 18px;font:600 13px/1 var(--sans);cursor:pointer;transition:.15s;}
+  .chat-row button:hover:not(:disabled){border-color:var(--signal);color:var(--signal);}
+  .chat-row button:disabled{opacity:.5;cursor:not-allowed;}
+
+  .quick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+  .quick button{background:transparent;border:1px solid var(--line2);color:var(--muted);
+                border-radius:99px;padding:6px 13px;font:500 12px/1 var(--sans);cursor:pointer;transition:.15s;}
+  .quick button:hover{border-color:var(--signal);color:var(--signal);}
+
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:99px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none !important;}
+  }
+  @media (max-width:560px){
+    .run{margin-left:0;width:100%;}
+    .controls{gap:12px;}
+  }
+</style>
+</head>
+<body>
+<div class="bg-field"></div>
+<div class="bg-grid"></div>
+<div class="bg-wave">
+  <svg viewBox="0 0 1200 800" preserveAspectRatio="none">
+    <path d="M0,400 Q150,320 300,400 T600,400 T900,400 T1200,400"/>
+    <path d="M0,430 Q150,500 300,430 T600,430 T900,430 T1200,430"/>
+  </svg>
+</div>
+
+<div class="shell">
+  <header class="top">
+    <div class="logo">
+      <svg viewBox="0 0 24 24"><path class="lp" d="M2 12 L6 12 L8 5 L11 19 L14 9 L16 14 L18 12 L22 12"/></svg>
+    </div>
+    <div>
+      <h1>Расшифровка</h1>
+      <div class="tag">whisper large-v3-turbo · gemini</div>
+    </div>
+    <div class="lite-switch" id="liteSwitch" title="Отключает фон, тени и анимации — экономит GPU и CPU">
+      <span>Лёгкий режим</span>
+      <span class="sw"></span>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="drop" id="drop">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+      </svg>
+      <strong>Перетащи аудиофайл</strong> или нажми, чтобы выбрать
+      <p>голосовые из мессенджеров, диктофон, запись звонка</p>
+      <div class="formats">OGG · MP3 · WAV · M4A · FLAC · OPUS</div>
+      <div class="scan"></div>
+      <input type="file" id="file" accept="audio/*,video/*" hidden>
+    </div>
+
+    <div class="file" id="fileName"></div>
+
+    <div class="controls">
+      <label class="ctl">Язык
+        <select id="lang">
+          <option value="ru" selected>Русский</option>
+          <option value="">Авто</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="clean" checked> вычистка через Gemini</label>
+      <button class="run" id="go" disabled>Расшифровать</button>
+    </div>
+
+    <div class="ctx show" id="ctxWrap">
+      <label>Контекст записи — подсказка для терминов (необязательно)</label>
+      <input type="text" id="context" placeholder="напр.: совещание по договору ТехАтомСтрой, КС-2, накопительные ведомости">
+    </div>
+
+    <div class="status" id="status">
+      <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
+      <div><span id="statusText">Обработка…</span><br><span class="sub" id="statusSub"></span></div>
+    </div>
+
+    <div class="out" id="out">
+      <div class="out-head">
+        <span class="t">Результат</span>
+        <span class="badge" id="badge">сырой whisper</span>
+        <button class="copy" id="copy">Копировать</button>
+      </div>
+      <textarea id="text" spellcheck="false"></textarea>
+    </div>
+
+    <div class="chat" id="chat">
+      <div class="chat-h">Вопросы по записи</div>
+      <div class="quick" id="quick">
+        <button data-q="Сделай краткое резюме записи в 3-5 пунктах.">Резюме</button>
+        <button data-q="Выпиши все задачи и поручения из записи списком.">Задачи</button>
+        <button data-q="Перечисли упомянутые сроки, даты и числа.">Сроки и числа</button>
+        <button data-q="Составь черновик делового письма по итогам этой записи.">Письмо</button>
+      </div>
+      <div class="log" id="log"></div>
+      <div class="chat-row">
+        <input type="text" id="chatInput" placeholder="Спроси что-нибудь по содержанию записи…">
+        <button id="chatSend">Спросить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const drop=$('drop'),fileInput=$('file'),fileName=$('fileName'),go=$('go'),
+      status=$('status'),statusText=$('statusText'),statusSub=$('statusSub'),
+      out=$('out'),text=$('text'),badge=$('badge'),langSel=$('lang'),
+      cleanChk=$('clean'),ctxWrap=$('ctxWrap'),
+      chat=$('chat'),log=$('log'),chatInput=$('chatInput'),chatSend=$('chatSend');
+let chosen=null, history=[];
+
+/* ── ЛЁГКИЙ РЕЖИМ (с запоминанием в localStorage — это локальный файл, не артефакт) ── */
+const liteSwitch=$('liteSwitch');
+function applyLite(on){
+  document.body.classList.toggle('lite',on);
+  liteSwitch.classList.toggle('on',on);
+  try{localStorage.setItem('stt_lite',on?'1':'0');}catch(e){}
+}
+applyLite((()=>{try{return localStorage.getItem('stt_lite')==='1';}catch(e){return false;}})());
+liteSwitch.addEventListener('click',()=>applyLite(!document.body.classList.contains('lite')));
+
+/* ── контекст-поле показываем только когда включена вычистка ── */
+cleanChk.addEventListener('change',()=>ctxWrap.classList.toggle('show',cleanChk.checked));
+
+/* ── выбор файла ── */
+drop.addEventListener('click',()=>fileInput.click());
+drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over');});
+drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
+drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');
+  if(e.dataTransfer.files.length)pick(e.dataTransfer.files[0]);});
+fileInput.addEventListener('change',()=>{if(fileInput.files.length)pick(fileInput.files[0]);});
+function pick(f){
+  chosen=f;
+  fileName.innerHTML='Выбран: <b>'+f.name+'</b> · '+(f.size/1048576).toFixed(1)+' МБ';
+  go.disabled=false;out.classList.remove('show');status.classList.remove('show');chat.classList.remove('show');
+}
+
+/* ── запуск: распознавание (+ вычистка) ── */
+go.addEventListener('click',async()=>{
+  if(!chosen)return;
+  go.disabled=true;out.classList.remove('show');chat.classList.remove('show');
+  status.className='status show';
+  statusText.textContent='Распознаю аудио локально…';
+  statusSub.textContent=cleanChk.checked?'затем — вычистка через Gemini':'';
+
+  const fd=new FormData();
+  fd.append('file',chosen);
+  fd.append('language',langSel.value);
+  fd.append('clean_with_gemini',cleanChk.checked);
+  fd.append('context',$('context').value);
+
+  try{
+    const r=await fetch('/process',{method:'POST',body:fd});
+    if(!r.ok)throw new Error('Сервер вернул '+r.status+'. '+(await r.text()).slice(0,120));
+    const data=await r.json();
+    text.value=data.text||'(пустой ответ)';
+    if(data.raw){badge.textContent='сырой whisper';badge.className='badge';}
+    else{badge.textContent='вычищено gemini';badge.className='badge ai';}
+    out.classList.add('show');
+    status.classList.remove('show');
+    initChat();
+  }catch(e){
+    status.className='status show err';
+    statusText.textContent='Ошибка';statusSub.textContent=e.message;
+  }finally{go.disabled=false;}
+});
+
+/* ── чат по расшифровке ── */
+function initChat(){
+  history=[];
+  log.innerHTML='';
+  appendMsg('system','Можно задавать вопросы по содержанию записи');
+  chat.classList.add('show');
+}
+$('quick').addEventListener('click',e=>{
+  const q=e.target.getAttribute('data-q');
+  if(q){chatInput.value=q;sendMsg();}
+});
+chatSend.addEventListener('click',sendMsg);
+chatInput.addEventListener('keypress',e=>{if(e.key==='Enter')sendMsg();});
+
+async function sendMsg(){
+  const msg=chatInput.value.trim();
+  if(!msg||chatSend.disabled)return;
+  appendMsg('user',msg);chatInput.value='';chatSend.disabled=true;
+  const loader=appendMsg('model','Думаю…');
+  try{
+    const r=await fetch('/chat',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({context:text.value,message:msg,history:history})});
+    const data=await r.json();
+    loader.remove();
+    if(data.error){appendMsg('model','Ошибка: '+data.error);}
+    else{
+      appendMsg('model',data.text);
+      history.push({role:'user',text:msg});
+      history.push({role:'model',text:data.text});
+    }
+  }catch(e){loader.remove();appendMsg('model','Ошибка соединения: '+e.message);}
+  finally{chatSend.disabled=false;}
+}
+function appendMsg(role,content){
+  const d=document.createElement('div');
+  d.className='msg '+role;d.textContent=content;
+  log.appendChild(d);log.scrollTop=log.scrollHeight;return d;
+}
+
+/* ── копирование ── */
+$('copy').addEventListener('click',()=>{
+  text.select();navigator.clipboard.writeText(text.value);
+  const b=$('copy'),o=b.textContent;b.textContent='Скопировано';
+  setTimeout(()=>b.textContent=o,1600);
+});
+</script>
+</body>
+</html>

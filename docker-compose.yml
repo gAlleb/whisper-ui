@@ -1,0 +1,31 @@
+services:
+  whisper:
+    image: hwdsl2/whisper-server:latest
+    container_name: whisper
+    restart: unless-stopped
+    volumes:
+      - ./whisper-data:/var/lib/whisper
+    environment:
+      - WHISPER_MODEL=large-v3-turbo
+      - WHISPER_COMPUTE_TYPE=int8
+      - WHISPER_LOCAL_ONLY=true
+      - WHISPER_CPU_THREADS=8
+
+  proxy:
+    build: .
+    container_name: whisper-proxy
+    depends_on:
+      - whisper
+    env_file: .env
+    restart: unless-stopped
+
+  ui:
+    image: nginx:alpine
+    container_name: transcriber-ui
+    depends_on:
+      - proxy
+    ports:
+      - "127.0.0.1:8090:80"
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
