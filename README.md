@@ -15,7 +15,7 @@
 
 ---
 
-# Если **HuggingFace CDN заблокирован** и модель не скачивается штатно при старте контейнера движка из-за встроенного 300-секундного таймаута, то это решается однократным скачиванием весов вспомогательным контейнером через VPN в общую папку-volume.
+# Если одель не скачивается штатно при старте контейнера движка из-за встроенного 300-секундного таймаута, то это решается однократным скачиванием весов вспомогательным контейнером (можно через VPN) в общую папку-volume. См. Шаг 4.
 
 ---
 
@@ -33,7 +33,7 @@
 ├── nginx.conf              # конфигурация веб-сервера и маршрутизации
 ├── proxy.py                # асинхронный оркестратор (FastAPI)
 └── whisper-data/           # кеш модели Whisper (создается при скачивании)
-
+```
 
 ## 2. Конфигурационные файлы проекта
 
@@ -45,31 +45,7 @@ GEMINI_API_KEY=твой_api_ключ_от_google_ai_studio
 
 ---
 
-## 3. Скачивание Whisper-модели вручную (ОДИН раз, можно через VPN) если они долго скачиваются.
-
-Ключевой этап обхода блокировки CDN HuggingFace.
-
-1.  **Включи VPN** на хосте (любой, который дает доступ к CDN HuggingFace).
-2.  Выполни скачивание весов во временном контейнере:
-    ```sh
-    docker run --rm -it \
-      -v "$PWD/whisper-data:/cache" \
-      python:3.12-slim bash -c "
-        pip install -q huggingface_hub &&
-        HF_HUB_DISABLE_XET=1 hf download \
-          mobiuslabsgmbh/faster-whisper-large-v3-turbo \
-          --cache-dir /cache
-      "
-    ```
-3.  Дождись завершения скачивания файлов (~1.6 ГБ).
-4.  Проверь, что веса успешно лежат в папке:
-    ```sh
-    ls -la whisper-data/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo/snapshots/*/
-    ```
-
----
-
-## 4. Первый запуск и сборка стека
+## 3. Первый запуск и сборка стека
 
 Убедись, что все файлы (`Dockerfile`, `docker-compose.yml`, `proxy.py`, `nginx.conf`, `index.html`, `.env`) лежат в одной папке.
 
@@ -91,6 +67,27 @@ docker ps --format '{{.Names}}\t{{.Status}}'
 ```sh
 docker compose logs whisper-proxy
 ```
+
+---
+
+## 4. Скачивание Whisper-модели вручную (ОДИН раз, можно через VPN) если они долго скачиваются или был таймаут при скачивании.
+
+1.  Выполни скачивание весов во временном контейнере:
+    ```sh
+    docker run --rm -it \
+      -v "$PWD/whisper-data:/cache" \
+      python:3.12-slim bash -c "
+        pip install -q huggingface_hub &&
+        HF_HUB_DISABLE_XET=1 hf download \
+          mobiuslabsgmbh/faster-whisper-large-v3-turbo \
+          --cache-dir /cache
+      "
+    ```
+2.  Дождись завершения скачивания файлов (~1.6 ГБ).
+3.  Проверь, что веса успешно лежат в папке:
+    ```sh
+    ls -la whisper-data/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo/snapshots/*/
+    ```
 
 ---
 
